@@ -2,7 +2,7 @@
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
 // @version      8.0
-// @description  Calculates actual paid prices based on cart discounts, separates currency, adds Gift Recipient.
+// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata (tags, scores, platforms) via the RAWG API.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
