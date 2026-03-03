@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Epic Games Library to CSV (Public - Timestamped)
+// @name         One-Click Epic Games Library to CSV
 // @namespace    http://tampermonkey.net/
 // @version      5.0
 // @description  Exports Epic history to CSV with RAWG tags, alphabetical sorting, and a YYYY/MM/DD HH:MM:SS timestamped filename.
