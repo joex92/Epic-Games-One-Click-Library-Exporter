@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      5.8
-// @description  Bypasses CSP, fixes 'Unexpected Token' error with better session detection.
+// @version      5.9
+// @description  Bypasses CSP, fixes 'Unexpected Token' error and 'NaN' date errors.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -22,6 +22,10 @@
 
     // --- HELPER FUNCTIONS ---
     function formatDateTime(dateObj) {
+        // Robust check: if dateObj is invalid, return placeholder
+        if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+            return "Unknown Date";
+        }
         const y = dateObj.getFullYear();
         const m = String(dateObj.getMonth() + 1).padStart(2, '0');
         const d = String(dateObj.getDate()).padStart(2, '0');
@@ -88,24 +92,27 @@
         logArea.scrollTop = logArea.scrollHeight;
     }
 
-    // --- DATA FETCHING (Now with Error Check) ---
+    // --- DATA FETCHING ---
     async function fetchHistory(nextPageToken = '', allGames = []) {
-        // Updated Endpoint
         const url = `https://www.epicgames.com/account/v2/payment/ajaxGetOrderHistory?nextPageToken=${nextPageToken}&locale=en-US`;
         const res = await fetch(url);
         
-        // CHECK: If the response isn't JSON, Epic redirected to a login/error page
         const contentType = res.headers.get("content-type");
         if (!contentType || !contentType.includes("application/json")) {
-            throw new Error("Epic session expired or blocked. Please refresh the page and try again.");
+            throw new Error("Epic session expired. Please refresh the page.");
         }
 
         const data = await res.json();
         if (!data.orders) return allGames;
 
         for (const order of data.orders) {
-            const dateStr = formatDateTime(new Date(order.createdAt));
-            for (const item of order.items) { allGames.push({ title: item.description, dateAdded: dateStr }); }
+            // FIX: Try multiple date fields in case createdAt is malformed
+            const rawDate = order.createdAt || order.completionDate || null;
+            const dateStr = formatDateTime(new Date(rawDate));
+            
+            for (const item of order.items) { 
+                allGames.push({ title: item.description, dateAdded: dateStr }); 
+            }
         }
         if (data.nextPageToken) return fetchHistory(data.nextPageToken, allGames);
         
@@ -119,7 +126,7 @@
         const results = [];
         const total = games.length;
         for (let i = 0; i < total; i++) {
-            if (shouldStop) { logMessage("STOPPED: Saving partial data...", "#dc3545"); break; }
+            if (shouldStop) break;
             while (isPaused && !shouldStop) { await new Promise(r => setTimeout(r, 500)); }
 
             if (progressBar) progressBar.style.width = `${((i + 1) / total) * 100}%`;
@@ -144,7 +151,7 @@
                     results.push({ ...games[i], title: displayTitle, tags: "N/A" });
                 }
             } catch (e) { results.push({ ...games[i], title: displayTitle, tags: "Error" }); }
-            await new Promise(r => setTimeout(r, 250)); // Slight delay to avoid RAWG rate limit
+            await new Promise(r => setTimeout(r, 250));
         }
         return results;
     }
@@ -165,7 +172,7 @@
         if (logContainer) document.getElementById('epic-log-text').innerHTML = '';
 
         try {
-            logMessage("Verifying Epic Session...", "#0078f2");
+            logMessage("Verifying session and dates...", "#0078f2");
             const games = await fetchHistory();
             
             let finalData = [];
@@ -182,13 +189,13 @@
             btn.style.backgroundColor = '#28a745';
         } catch (e) {
             logMessage(`ERROR: ${e.message}`, "#dc3545");
-            btn.innerText = 'Failed (Check Log)';
+            btn.innerText = 'Failed';
             btn.style.backgroundColor = '#dc3545';
         }
 
         setTimeout(() => { 
             if (logContainer) logContainer.style.display = 'none';
-            btn.innerText = 'Export Library (v5.8)'; 
+            btn.innerText = 'Export Library (v5.9)'; 
             btn.disabled = false; 
             btn.style.backgroundColor = '#0078f2'; 
         }, 12000);
@@ -197,7 +204,7 @@
     function downloadCSV(data) {
         const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
-        const header = ['Game Title', 'Date Added', 'Tags & Genres'];
+        const header = ['Game Title', 'Date Added (YYYY/MM/DD HH:MM:SS)', 'Tags & Genres'];
         const rows = data.map(r => [`"${r.title.replace(/"/g, '""')}"`, `"${r.dateAdded}"`, `"${r.tags.replace(/"/g, '""')}"`]);
         const content = [header, ...rows].map(e => e.join(",")).join("\n");
         const link = document.createElement("a");
@@ -210,7 +217,7 @@
         if (document.getElementById('epic-csv-export-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Library (v5.8)';
+        btn.innerText = 'Export Library (v5.9)';
         btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
         btn.onclick = startExport;
         document.body.appendChild(btn);
