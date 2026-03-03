@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      9.0
-// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata (tags, scores, platforms) via the RAWG API. Retains all Epic data even if the process is stopped early.
+// @version      9.1
+// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata via the RAWG API. Now includes personalized filenames.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -49,6 +49,20 @@
             cleaned = cleaned.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
         }
         return cleaned.replace(/ (Standard|Premium|Deluxe|Ultimate|Gold|GOTY|Director's Cut) Edition/gi, '').trim();
+    }
+
+    // NEW: Function to safely extract and format the user's Display Name
+    function getFormattedUserName() {
+        const nameInput = document.getElementById('displayName');
+        if (nameInput && nameInput.value) {
+            const rawName = nameInput.value.trim();
+            if (rawName.length > 0) {
+                // Replace any spaces with hyphens
+                return rawName.replace(/\s+/g, '-');
+            }
+        }
+        // Fallback if the element isn't found or is empty
+        return "My";
     }
 
     // --- UI COMPONENTS ---
@@ -173,10 +187,8 @@
         const total = games.length;
         
         for (let i = 0; i < total; i++) {
-            // Wait here if paused. If stop is clicked while paused, shouldStop becomes true and breaks the wait.
             while (isPaused && !shouldStop) { await new Promise(r => setTimeout(r, 500)); }
 
-            // If stop was clicked, append the remaining Epic items with placeholder RAWG data
             if (shouldStop) {
                 logMessage(`STOPPED: Appending ${total - i} remaining titles without RAWG data...`, "#dc3545");
                 for (let j = i; j < total; j++) {
@@ -194,7 +206,7 @@
                         platforms: "Skipped"
                     });
                 }
-                break; // Exit the main fetching loop entirely
+                break; 
             }
 
             if (progressBar) progressBar.style.width = `${((i + 1) / total) * 100}%`;
@@ -292,6 +304,8 @@
     }
 
     function downloadCSV(data) {
+        // Fetch personalized name and format timestamp
+        const userName = getFormattedUserName();
         const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
         
@@ -336,7 +350,10 @@
         const content = [header, ...rows].map(e => e.join(",")).join("\n");
         const link = document.createElement("a");
         link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
-        link.download = `Epic_Library_Full_${fileTime}.csv`;
+        
+        // NEW: Personalized Filename implementation
+        link.download = `EpicGames_${userName}_Library_${fileTime}.csv`;
+        
         link.click();
     }
 
