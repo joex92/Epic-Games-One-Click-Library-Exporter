@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      8.0
-// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata (tags, scores, platforms) via the RAWG API.
+// @version      9.0
+// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata (tags, scores, platforms) via the RAWG API. Retains all Epic data even if the process is stopped early.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -67,7 +67,7 @@
 
         const header = document.createElement('div');
         header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #1a1a1a; border-bottom: 1px solid #333;';
-        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export (v8.0)</span>
+        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export</span>
             <div>
                 <button id="epic-pause" style="background:#555; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer; margin-right:5px;">Pause</button>
                 <button id="epic-stop" style="background:#dc3545; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer;">Stop & Save</button>
@@ -117,14 +117,11 @@
             const dateStr = formatDateTime(new Date(rawDate));
             const orderId = order.orderId || "Unknown";
             
-            // 1. Calculate the sum of the base prices of all items in this specific order
             let orderItemsTotalCents = 0;
             for (const item of order.items) {
                 orderItemsTotalCents += (item.amount || 0);
             }
             
-            // 2. Identify the final actual amount charged to the user
-            // We prioritize 'total', but fall back to 'subtotal' if missing
             let orderActualTotalCents = 0;
             if (order.total && order.total.amount !== undefined) {
                 orderActualTotalCents = order.total.amount;
@@ -132,7 +129,6 @@
                 orderActualTotalCents = order.subtotal.amount;
             }
 
-            // 3. Calculate the discount ratio
             let ratio = 0;
             if (orderItemsTotalCents > 0) {
                 ratio = orderActualTotalCents / orderItemsTotalCents;
@@ -142,7 +138,6 @@
                 const originalCents = item.amount || 0;
                 let actualPaidCents = 0;
                 
-                // Only distribute discounts to items that actually had a price to begin with
                 if (originalCents > 0) {
                     actualPaidCents = Math.round(originalCents * ratio);
                 }
@@ -178,8 +173,29 @@
         const total = games.length;
         
         for (let i = 0; i < total; i++) {
-            if (shouldStop) break;
+            // Wait here if paused. If stop is clicked while paused, shouldStop becomes true and breaks the wait.
             while (isPaused && !shouldStop) { await new Promise(r => setTimeout(r, 500)); }
+
+            // If stop was clicked, append the remaining Epic items with placeholder RAWG data
+            if (shouldStop) {
+                logMessage(`STOPPED: Appending ${total - i} remaining titles without RAWG data...`, "#dc3545");
+                for (let j = i; j < total; j++) {
+                    const game = games[j];
+                    const displayTitle = smartCleanTitle(game.title);
+                    results.push({ 
+                        ...game, 
+                        title: displayTitle, 
+                        tags: "Skipped",
+                        releaseDate: "Skipped",
+                        metacritic: "Skipped",
+                        rating: "Skipped",
+                        playtime: "Skipped",
+                        esrb: "Skipped",
+                        platforms: "Skipped"
+                    });
+                }
+                break; // Exit the main fetching loop entirely
+            }
 
             if (progressBar) progressBar.style.width = `${((i + 1) / total) * 100}%`;
             const displayTitle = smartCleanTitle(games[i].title);
@@ -223,7 +239,7 @@
                     results.push({ ...games[i], title: displayTitle, tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" });
                 }
             } catch (e) { 
-                results.push({ ...games[i], title: displayTitle, tags: "Error", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" }); 
+                results.push({ ...games[i], title: displayTitle, tags: "Error", releaseDate: "Error", metacritic: "Error", rating: "Error", playtime: "Error", esrb: "Error", platforms: "Error" }); 
             }
             await new Promise(r => setTimeout(r, 250));
         }
@@ -269,7 +285,7 @@
 
         setTimeout(() => { 
             if (logContainer) logContainer.style.display = 'none';
-            btn.innerText = 'Export Full Data (v8.0)'; 
+            btn.innerText = 'Export Full Data'; 
             btn.disabled = false; 
             btn.style.backgroundColor = '#0078f2'; 
         }, 12000);
@@ -320,7 +336,7 @@
         const content = [header, ...rows].map(e => e.join(",")).join("\n");
         const link = document.createElement("a");
         link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
-        link.download = `Epic_Library_Financials_${fileTime}.csv`;
+        link.download = `Epic_Library_Full_${fileTime}.csv`;
         link.click();
     }
 
@@ -328,7 +344,7 @@
         if (document.getElementById('epic-csv-export-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Full Data (v8.0)';
+        btn.innerText = 'Export Full Data';
         btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
         btn.onclick = startExport;
         document.body.appendChild(btn);
