@@ -62,7 +62,7 @@
         const response = await fetch(url);
         const data = await response.json();
 
-        const ignoreKeywords = ['v-bucks', 'credits', 'pack', 'dlc', 'addon', 'add-on', 'upgrade', 'soundtrack', 'kudos', 'platinum', 'coins'];
+        const ignoreKeywords = ['v-bucks', 'credits', 'pack', 'dlc', 'addon', 'add-on', 'upgrade', 'soundtrack', 'platinum', 'coins'];
 
         for (const order of data.orders) {
             for (const item of order.items) {
