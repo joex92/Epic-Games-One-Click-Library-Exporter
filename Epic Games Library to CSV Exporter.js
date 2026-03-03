@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      7.0
-// @description  Pulls maximum metadata from both Epic (Prices, Order IDs) and RAWG (Scores, Release Dates, Platforms).
+// @version      8.0
+// @description  Calculates actual paid prices based on cart discounts, separates currency, adds Gift Recipient.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -67,7 +67,7 @@
 
         const header = document.createElement('div');
         header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #1a1a1a; border-bottom: 1px solid #333;';
-        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export (v7.0)</span>
+        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export (v8.0)</span>
             <div>
                 <button id="epic-pause" style="background:#555; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer; margin-right:5px;">Pause</button>
                 <button id="epic-stop" style="background:#dc3545; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer;">Stop & Save</button>
@@ -117,21 +117,53 @@
             const dateStr = formatDateTime(new Date(rawDate));
             const orderId = order.orderId || "Unknown";
             
+            // 1. Calculate the sum of the base prices of all items in this specific order
+            let orderItemsTotalCents = 0;
+            for (const item of order.items) {
+                orderItemsTotalCents += (item.amount || 0);
+            }
+            
+            // 2. Identify the final actual amount charged to the user
+            // We prioritize 'total', but fall back to 'subtotal' if missing
+            let orderActualTotalCents = 0;
+            if (order.total && order.total.amount !== undefined) {
+                orderActualTotalCents = order.total.amount;
+            } else if (order.subtotal && order.subtotal.amount !== undefined) {
+                orderActualTotalCents = order.subtotal.amount;
+            }
+
+            // 3. Calculate the discount ratio
+            let ratio = 0;
+            if (orderItemsTotalCents > 0) {
+                ratio = orderActualTotalCents / orderItemsTotalCents;
+            }
+
             for (const item of order.items) { 
-                // Convert price from cents (e.g., 999 -> 9.99)
-                const amount = item.amount ? (item.amount / 100).toFixed(2) : "0.00";
-                const currency = item.currency || "USD";
+                const originalCents = item.amount || 0;
+                let actualPaidCents = 0;
+                
+                // Only distribute discounts to items that actually had a price to begin with
+                if (originalCents > 0) {
+                    actualPaidCents = Math.round(originalCents * ratio);
+                }
+                
+                const originalPriceStr = (originalCents / 100).toFixed(2);
+                const actualPaidStr = (actualPaidCents / 100).toFixed(2);
                 
                 allGames.push({ 
                     title: item.description, 
                     dateAdded: dateStr,
                     orderId: orderId,
-                    price: `${amount} ${currency}`,
+                    originalPrice: originalPriceStr,
+                    actualPaid: actualPaidStr,
+                    currency: item.currency || "USD",
+                    giftRecipient: item.giftRecipient || "",
                     namespace: item.namespace || "N/A",
                     offerId: item.offerId || "N/A"
                 }); 
             }
         }
+        
         if (data.nextPageToken) return fetchHistory(data.nextPageToken, allGames);
         
         const unique = [];
@@ -166,7 +198,6 @@
                     const info = data.results[0];
                     const meta = [...new Set([...(info.genres?.map(g => g.name) || []), ...(info.tags?.filter(t => t.language === 'eng').map(t => t.name).slice(0, 4) || [])])];
                     
-                    // Extracting all the new extended data
                     const releaseDate = info.released || "N/A";
                     const metacritic = info.metacritic || "N/A";
                     const rating = info.rating ? `${info.rating} / ${info.rating_top}` : "N/A";
@@ -215,7 +246,7 @@
         if (logContainer) document.getElementById('epic-log-text').innerHTML = '';
 
         try {
-            logMessage("Verifying Epic history and receipts...", "#0078f2");
+            logMessage("Verifying Epic history and calculating price distributions...", "#0078f2");
             const games = await fetchHistory();
             
             let finalData = [];
@@ -238,7 +269,7 @@
 
         setTimeout(() => { 
             if (logContainer) logContainer.style.display = 'none';
-            btn.innerText = 'Export Full Data (v7.0)'; 
+            btn.innerText = 'Export Full Data (v8.0)'; 
             btn.disabled = false; 
             btn.style.backgroundColor = '#0078f2'; 
         }, 12000);
@@ -248,11 +279,13 @@
         const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
         
-        // Massive new header list!
         const header = [
             'Game Title', 
             'Date Added', 
-            'Price Paid', 
+            'Original Price',
+            'Actual Paid',
+            'Currency',
+            'Gift Recipient',
             'Order ID',
             'Namespace',
             'Offer ID',
@@ -268,7 +301,10 @@
         const rows = data.map(r => [
             `"${r.title.replace(/"/g, '""')}"`,
             `"${r.dateAdded}"`,
-            `"${r.price}"`,
+            `"${r.originalPrice}"`,
+            `"${r.actualPaid}"`,
+            `"${r.currency}"`,
+            `"${r.giftRecipient}"`,
             `"${r.orderId}"`,
             `"${r.namespace}"`,
             `"${r.offerId}"`,
@@ -284,7 +320,7 @@
         const content = [header, ...rows].map(e => e.join(",")).join("\n");
         const link = document.createElement("a");
         link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
-        link.download = `Epic_Library_Full_${fileTime}.csv`;
+        link.download = `Epic_Library_Financials_${fileTime}.csv`;
         link.click();
     }
 
@@ -292,7 +328,7 @@
         if (document.getElementById('epic-csv-export-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Full Data (v7.0)';
+        btn.innerText = 'Export Full Data (v8.0)';
         btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
         btn.onclick = startExport;
         document.body.appendChild(btn);
