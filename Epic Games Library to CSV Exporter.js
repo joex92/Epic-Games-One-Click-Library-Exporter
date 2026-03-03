@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      10.1
-// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata via the RAWG API. Features verbose logging and manual log control.
+// @version      11.0
+// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata via the RAWG API. Features live ETA and manual log control.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -62,6 +62,15 @@
         return "My";
     }
 
+    function formatETA(millis) {
+        if (millis === 0 || isNaN(millis)) return "Calculating ETA...";
+        const totalSecs = Math.round(millis / 1000);
+        const mins = Math.floor(totalSecs / 60);
+        const secs = totalSecs % 60;
+        if (mins === 0) return `${secs}s left`;
+        return `${mins}m ${secs}s left`;
+    }
+
     // --- UI COMPONENTS ---
     function createLogger() {
         if (logContainer) return;
@@ -78,7 +87,11 @@
 
         const header = document.createElement('div');
         header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #1a1a1a; border-bottom: 1px solid #333;';
-        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export</span>
+        header.innerHTML = `
+            <div style="display:flex; align-items:baseline;">
+                <span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export</span>
+                <span id="epic-eta" style="color:#888; font-size:10px; margin-left:8px; font-style:italic;"></span>
+            </div>
             <div>
                 <button id="epic-pause" style="background:#555; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer; margin-right:5px;">Pause</button>
                 <button id="epic-stop" style="background:#dc3545; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer;">Stop & Save</button>
@@ -204,12 +217,16 @@
     async function fetchTagsWithControls(games, apiKey) {
         const results = [];
         const total = games.length;
+        let totalFetchTime = 0;
+        const etaElement = document.getElementById('epic-eta');
         
         for (let i = 0; i < total; i++) {
+            // Pausing logic happens BEFORE starting the stopwatch
             while (isPaused && !shouldStop) { await new Promise(r => setTimeout(r, 500)); }
 
             if (shouldStop) {
                 logMessage(`STOPPED: Appending ${total - i} remaining titles without RAWG data...`, "#dc3545");
+                if (etaElement) etaElement.innerText = "Stopped";
                 for (let j = i; j < total; j++) {
                     const game = games[j];
                     const displayTitle = smartCleanTitle(game.title);
@@ -227,6 +244,8 @@
                 }
                 break; 
             }
+
+            const iterationStart = Date.now(); // ⏱️ Start Stopwatch
 
             if (progressBar) progressBar.style.width = `${((i + 1) / total) * 100}%`;
             const displayTitle = smartCleanTitle(games[i].title);
@@ -273,8 +292,22 @@
                 logMessage(`<span style="color:#dc3545;">[${i+1}/${total}]</span> ${displayTitle} <span style="color:#dc3545;">❌ Error</span>`);
                 results.push({ ...games[i], title: displayTitle, tags: "Error", releaseDate: "Error", metacritic: "Error", rating: "Error", playtime: "Error", esrb: "Error", platforms: "Error" }); 
             }
+            
             await new Promise(r => setTimeout(r, 250));
+
+            // ⏱️ Stop Stopwatch and update ETA
+            const iterationTime = Date.now() - iterationStart;
+            totalFetchTime += iterationTime;
+            const avgTime = totalFetchTime / (i + 1);
+            const remainingItems = total - (i + 1);
+            
+            if (etaElement && !shouldStop) {
+                etaElement.innerText = formatETA(avgTime * remainingItems);
+            }
         }
+        
+        const finalEta = document.getElementById('epic-eta');
+        if (finalEta && !shouldStop) finalEta.innerText = "Done";
         return results;
     }
 
@@ -292,6 +325,8 @@
         const btn = document.getElementById('epic-csv-export-btn');
         btn.disabled = true;
         if (logContainer) document.getElementById('epic-log-text').innerHTML = '';
+        const etaElement = document.getElementById('epic-eta');
+        if (etaElement) etaElement.innerText = "";
 
         try {
             logMessage("Verifying Epic history and calculating price distributions...", "#0078f2");
@@ -371,6 +406,16 @@
         link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
         link.download = `EpicGames_${userName}_Library_${fileTime}.csv`;
         link.click();
+    }
+
+    function createButton() {
+        if (document.getElementById('epic-csv-export-btn')) return;
+        const btn = document.createElement('button');
+        btn.id = 'epic-csv-export-btn';
+        btn.innerText = 'Export Full Data';
+        btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
+        btn.onclick = startExport;
+        document.body.appendChild(btn);
     }
 
     setInterval(createButton, 2000);
