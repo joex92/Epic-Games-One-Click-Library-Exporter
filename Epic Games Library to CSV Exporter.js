@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      9.1
-// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata via the RAWG API. Now includes personalized filenames.
+// @version      10.1
+// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata via the RAWG API. Features verbose logging and manual log control.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -51,17 +51,14 @@
         return cleaned.replace(/ (Standard|Premium|Deluxe|Ultimate|Gold|GOTY|Director's Cut) Edition/gi, '').trim();
     }
 
-    // NEW: Function to safely extract and format the user's Display Name
     function getFormattedUserName() {
         const nameInput = document.getElementById('displayName');
         if (nameInput && nameInput.value) {
             const rawName = nameInput.value.trim();
             if (rawName.length > 0) {
-                // Replace any spaces with hyphens
                 return rawName.replace(/\s+/g, '-');
             }
         }
-        // Fallback if the element isn't found or is empty
         return "My";
     }
 
@@ -111,6 +108,28 @@
         line.innerHTML = `<span style="color: #666; margin-right: 8px;">[${new Date().toLocaleTimeString([], {hour12: false})}]</span> ${msg}`;
         logArea.appendChild(line);
         logArea.scrollTop = logArea.scrollHeight;
+    }
+
+    // --- BUTTON BEHAVIORS ---
+    function closeLog() {
+        if (logContainer) logContainer.style.display = 'none';
+        const btn = document.getElementById('epic-csv-export-btn');
+        if (btn) {
+            btn.innerText = 'Export Full Data';
+            btn.style.backgroundColor = '#0078f2';
+            btn.disabled = false;
+            btn.onclick = startExport;
+        }
+    }
+
+    function createButton() {
+        if (document.getElementById('epic-csv-export-btn')) return;
+        const btn = document.createElement('button');
+        btn.id = 'epic-csv-export-btn';
+        btn.innerText = 'Export Full Data';
+        btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
+        btn.onclick = startExport;
+        document.body.appendChild(btn);
     }
 
     // --- DATA FETCHING (EPIC) ---
@@ -233,7 +252,7 @@
                     const esrb = info.esrb_rating ? info.esrb_rating.name : "N/A";
                     const platforms = info.platforms ? info.platforms.map(p => p.platform.name).join(', ') : "N/A";
 
-                    logMessage(`<span style="color:#0078f2;">#${i+1}</span> ${displayTitle}`);
+                    logMessage(`<span style="color:#0078f2;">[${i+1}/${total}]</span> ${displayTitle} <span style="color:#28a745;">✓ Success</span>`);
                     
                     results.push({ 
                         ...games[i], 
@@ -247,10 +266,11 @@
                         platforms: platforms
                     });
                 } else {
-                    logMessage(`<span style="color:#555;">#${i+1}</span> ${displayTitle} (No match)`);
+                    logMessage(`<span style="color:#555;">[${i+1}/${total}]</span> ${displayTitle} <span style="color:#ffc107;">⚠ Not Found</span>`);
                     results.push({ ...games[i], title: displayTitle, tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" });
                 }
             } catch (e) { 
+                logMessage(`<span style="color:#dc3545;">[${i+1}/${total}]</span> ${displayTitle} <span style="color:#dc3545;">❌ Error</span>`);
                 results.push({ ...games[i], title: displayTitle, tags: "Error", releaseDate: "Error", metacritic: "Error", rating: "Error", playtime: "Error", esrb: "Error", platforms: "Error" }); 
             }
             await new Promise(r => setTimeout(r, 250));
@@ -287,24 +307,23 @@
 
             finalData.sort((a, b) => a.title.localeCompare(b.title));
             downloadCSV(finalData);
-            btn.innerText = 'Complete!';
+            
+            btn.innerText = 'Complete! (Close Log)';
             btn.style.backgroundColor = '#28a745';
+            btn.disabled = false;
+            btn.onclick = closeLog;
+
         } catch (e) {
             logMessage(`ERROR: ${e.message}`, "#dc3545");
-            btn.innerText = 'Failed';
+            
+            btn.innerText = 'Failed (Close Log)';
             btn.style.backgroundColor = '#dc3545';
+            btn.disabled = false;
+            btn.onclick = closeLog;
         }
-
-        setTimeout(() => { 
-            if (logContainer) logContainer.style.display = 'none';
-            btn.innerText = 'Export Full Data'; 
-            btn.disabled = false; 
-            btn.style.backgroundColor = '#0078f2'; 
-        }, 12000);
     }
 
     function downloadCSV(data) {
-        // Fetch personalized name and format timestamp
         const userName = getFormattedUserName();
         const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
@@ -350,21 +369,8 @@
         const content = [header, ...rows].map(e => e.join(",")).join("\n");
         const link = document.createElement("a");
         link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
-        
-        // NEW: Personalized Filename implementation
         link.download = `EpicGames_${userName}_Library_${fileTime}.csv`;
-        
         link.click();
-    }
-
-    function createButton() {
-        if (document.getElementById('epic-csv-export-btn')) return;
-        const btn = document.createElement('button');
-        btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Full Data';
-        btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
-        btn.onclick = startExport;
-        document.body.appendChild(btn);
     }
 
     setInterval(createButton, 2000);
