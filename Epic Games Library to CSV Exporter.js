@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
-// @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter/
-// @version      5.4
-// @description  Bypasses CSP, exports Epic history to CSV, and shows a live log with a seamless progress bar.
+// @namespace    http://tampermonkey.net/
+// @version      5.5
+// @description  Bypasses CSP, fixed 'now' variable error, and adds a seamless progress bar.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -28,55 +28,52 @@
         }
     });
 
+    // FIXED: Now correctly uses the dateObj parameter
     function formatDateTime(dateObj) {
         const y = dateObj.getFullYear();
         const m = String(dateObj.getMonth() + 1).padStart(2, '0');
         const d = String(dateObj.getDate()).padStart(2, '0');
-        const hh = String(now.getHours()).padStart(2, '0'); // Note: 'now' fixed to dateObj below
+        const hh = String(dateObj.getHours()).padStart(2, '0');
         const mm = String(dateObj.getMinutes()).padStart(2, '0');
         const ss = String(dateObj.getSeconds()).padStart(2, '0');
         return `${y}/${m}/${d} ${hh}:${mm}:${ss}`;
     }
-    // Fixed reference for the internal date helper
-    function getNowFormatted() { return formatDateTime(new Date()); }
 
     // --- UI COMPONENTS ---
     function createLogger() {
         if (logContainer) return;
         
-        // Main Container
         logContainer = document.createElement('div');
         logContainer.id = 'epic-logger-container';
-        logContainer.style.cssText = 'position: fixed; bottom: 80px; right: 20px; width: 380px; background: rgba(0,0,0,0.9); border-radius: 8px; z-index: 10000; display: none; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); overflow: hidden;';
+        logContainer.style.cssText = 'position: fixed; bottom: 80px; right: 20px; width: 380px; background: rgba(0,0,0,0.92); border-radius: 8px; z-index: 10000; display: none; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); overflow: hidden;';
         
-        // Progress Bar Wrapper
         const progressWrapper = document.createElement('div');
-        progressWrapper.style.cssText = 'width: 100%; height: 6px; background: #222;';
+        progressWrapper.style.cssText = 'width: 100%; height: 4px; background: #222;';
         
         progressBar = document.createElement('div');
-        progressBar.style.cssText = 'width: 0%; height: 100%; background: #0078f2; transition: width 0.3s ease;';
+        progressBar.style.cssText = 'width: 0%; height: 100%; background: #0078f2; transition: width 0.2s ease;';
         
         progressWrapper.appendChild(progressBar);
         logContainer.appendChild(progressWrapper);
 
-        // Text Log Area
         const logText = document.createElement('div');
         logText.id = 'epic-log-text';
-        logText.style.cssText = 'height: 200px; color: #aaa; font-family: "Segoe UI", monospace; font-size: 11px; padding: 12px; overflow-y: auto; pointer-events: none; line-height: 1.5;';
+        logText.style.cssText = 'height: 180px; color: #ccc; font-family: "Consolas", "Monaco", monospace; font-size: 11px; padding: 12px; overflow-y: auto; line-height: 1.6;';
         logContainer.appendChild(logText);
 
         document.body.appendChild(logContainer);
     }
 
-    function logMessage(msg, color = "#aaa") {
+    function logMessage(msg, color = "#ccc") {
         if (!logContainer) createLogger();
         logContainer.style.display = 'block';
-        const logText = document.getElementById('epic-log-text');
+        const logArea = document.getElementById('epic-log-text');
         const line = document.createElement('div');
         line.style.color = color;
-        line.innerHTML = `<span style="color: #555;">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
-        logText.appendChild(line);
-        logText.scrollTop = logText.scrollHeight;
+        const time = new Date().toLocaleTimeString([], {hour12: false});
+        line.innerHTML = `<span style="color: #666; margin-right: 8px;">[${time}]</span> ${msg}`;
+        logArea.appendChild(line);
+        logArea.scrollTop = logArea.scrollHeight;
     }
 
     function updateProgress(current, total) {
@@ -90,16 +87,16 @@
         if (document.getElementById('epic-csv-export-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Library (v5.4)';
-        btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: all 0.2s;';
+        btn.innerText = 'Export Library (v5.5)';
+        btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3); transition: transform 0.1s;';
         
-        btn.onmouseover = () => btn.style.backgroundColor = '#0062c4';
-        btn.onmouseout = () => btn.style.backgroundColor = '#0078f2';
+        btn.onmousedown = () => btn.style.transform = 'scale(0.95)';
+        btn.onmouseup = () => btn.style.transform = 'scale(1)';
         btn.onclick = startExport;
         document.body.appendChild(btn);
     }
 
-    // --- MAIN LOGIC ---
+    // --- LOGIC ---
     async function startExport() {
         let rawgApiKey = GM_getValue("rawg_api_key", "");
         let skipTags = false;
@@ -116,45 +113,44 @@
 
         const btn = document.getElementById('epic-csv-export-btn');
         btn.disabled = true;
-        btn.style.opacity = "0.7";
+        btn.style.backgroundColor = "#444";
         if (logContainer) document.getElementById('epic-log-text').innerHTML = '';
         updateProgress(0, 100);
 
         try {
-            logMessage("Connecting to Epic Games account services...", "#0078f2");
+            logMessage("Requesting history from Epic servers...", "#0078f2");
             const games = await fetchHistory();
-            logMessage(`Success: ${games.length} games identified.`, "#28a745");
+            logMessage(`Verified ${games.length} library items.`, "#28a745");
             
             let finalData;
             if (skipTags) {
-                logMessage("Bypassing RAWG metadata sync.");
+                logMessage("Standard export initiated (no tags).");
                 updateProgress(100, 100);
                 finalData = games.map(g => ({ ...g, tags: "N/A" }));
             } else {
-                logMessage("Initiating RAWG API handshake...", "#0078f2");
+                logMessage("Syncing with RAWG.io database...", "#0078f2");
                 finalData = await fetchTagsFromRAWG(games, btn, rawgApiKey);
             }
 
-            logMessage("Finalizing CSV structure and sorting...", "#ffc107");
+            logMessage("Finalizing sort order...", "#ffc107");
             finalData.sort((a, b) => a.title.localeCompare(b.title));
             downloadCSV(finalData);
 
-            btn.innerText = 'Done!';
+            btn.innerText = 'Success!';
             btn.style.backgroundColor = '#28a745';
-            logMessage("EXPORT COMPLETE: Check your downloads folder.", "#28a745");
+            logMessage("DOWNLOAD READY: File generated successfully.", "#28a745");
         } catch (e) {
-            logMessage(`ERROR: ${e.message}`, "#dc3545");
+            logMessage(`CRITICAL ERROR: ${e.message}`, "#dc3545");
             btn.innerText = 'Failed';
             btn.style.backgroundColor = '#dc3545';
         }
 
         setTimeout(() => { 
             if (logContainer) logContainer.style.display = 'none';
-            btn.innerText = 'Export Library (v5.4)'; 
+            btn.innerText = 'Export Library (v5.5)'; 
             btn.disabled = false; 
-            btn.style.opacity = "1";
             btn.style.backgroundColor = '#0078f2'; 
-        }, 10000);
+        }, 12000);
     }
 
     async function fetchHistory(nextPageToken = '', allGames = []) {
@@ -205,10 +201,10 @@
                     const info = data.results[0];
                     const meta = [...new Set([...(info.genres?.map(g => g.name) || []), ...(info.tags?.filter(t => t.language === 'eng').map(t => t.name).slice(0, 4) || [])])];
                     const tagsStr = meta.join(', ');
-                    logMessage(`<span style="color:#0078f2;">[${i+1}/${total}]</span> ${game.title} <span style="color:#666;">➔</span> ${tagsStr || 'Generic'}`);
+                    logMessage(`<span style="color:#0078f2;">#${i+1}</span> ${game.title} <span style="color:#28a745;">✓</span>`);
                     results.push({ ...game, tags: tagsStr || "No tags" });
                 } else {
-                    logMessage(`<span style="color:#555;">[${i+1}/${total}]</span> ${game.title} <span style="color:#dc3545;">➔ Not Found</span>`);
+                    logMessage(`<span style="color:#555;">#${i+1}</span> ${game.title} <span style="color:#666;">➔ Not Found</span>`);
                     results.push({ ...game, tags: "N/A" });
                 }
             } catch (e) {
@@ -221,8 +217,7 @@
     }
 
     function downloadCSV(data) {
-        const now = new Date();
-        const timestamp = formatDateTime(now);
+        const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
         const header = ['Game Title', 'Date Added (YYYY/MM/DD HH:MM:SS)', 'Tags & Genres'];
         const rows = data.map(r => [`"${r.title.replace(/"/g, '""')}"`, `"${r.dateAdded}"`, `"${r.tags.replace(/"/g, '""')}"`]);
