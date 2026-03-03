@@ -170,6 +170,7 @@
         if (!data.orders) return allGames;
 
         for (const order of data.orders) {
+            console.log(order);
             const rawDate = order.createdAtMillis || null;
             const dateStr = formatDateTime(new Date(rawDate));
             const orderId = order.orderId || "Unknown";
