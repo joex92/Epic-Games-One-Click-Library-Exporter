@@ -1,175 +1,153 @@
 // ==UserScript==
-// @name         One-Click Epic Games Library to CSV Exporter
-// @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      1.2
-// @description  Fetches Epic Games library via transaction history, filters out add-ons, retrieves tags, and exports to CSV.
+// @name         Epic Games Library to CSV (Final - Timestamped)
+// @namespace    http://tampermonkey.net/
+// @version      5.1
+// @description  Exports Epic history to CSV with RAWG tags, alphabetical sorting, and a YYYY/MM/DD HH:MM:SS timestamp.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
-// @grant        GM_xmlhttpRequest
-// @connect      store-content-ipv4.ak.epicgames.com
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // 1. Create a floating button on the page
+    // --- API KEY MANAGEMENT ---
+    GM_registerMenuCommand("Update RAWG API Key", function() {
+        const currentKey = GM_getValue("rawg_api_key", "");
+        const newKey = prompt("Enter your RAWG API Key (leave blank to clear):", currentKey);
+        if (newKey !== null) {
+            GM_setValue("rawg_api_key", newKey.trim());
+            alert("Key updated!");
+        }
+    });
+
+    // Formats date as YYYY/MM/DD HH:MM:SS
+    function formatDateTime(dateObj) {
+        const y = dateObj.getFullYear();
+        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dateObj.getDate()).padStart(2, '0');
+        const hh = String(dateObj.getHours()).padStart(2, '0');
+        const mm = String(dateObj.getMinutes()).padStart(2, '0');
+        const ss = String(dateObj.getSeconds()).padStart(2, '0');
+        return `${y}/${m}/${d} ${hh}:${mm}:${ss}`;
+    }
+
+    // --- UI ---
     function createButton() {
         if (document.getElementById('epic-csv-export-btn')) return;
-
         const btn = document.createElement('button');
         btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Clean Library to CSV';
+        btn.innerText = 'Export Library (Full Metadata)';
         btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
-
         btn.onclick = startExport;
         document.body.appendChild(btn);
     }
 
-    // 2. Main execution logic
     async function startExport() {
+        let rawgApiKey = GM_getValue("rawg_api_key", "");
+        let skipTags = false;
+
+        if (!rawgApiKey) {
+            let input = prompt("Enter RAWG API Key for tags, or Cancel to export without tags.");
+            if (input) {
+                rawgApiKey = input.trim();
+                GM_setValue("rawg_api_key", rawgApiKey);
+            } else {
+                if (confirm("Export WITHOUT tags?")) skipTags = true; else return;
+            }
+        }
+
         const btn = document.getElementById('epic-csv-export-btn');
-        btn.innerText = 'Fetching History...';
+        btn.innerText = 'Loading Epic Data...';
         btn.disabled = true;
-        btn.style.backgroundColor = '#555';
 
         try {
             const games = await fetchHistory();
-            btn.innerText = `Fetching Tags for ${games.length} base games...`;
+            let finalData;
 
-            const dataWithTags = await fetchTagsForGames(games, btn);
+            if (skipTags) {
+                finalData = games.map(g => ({ ...g, tags: "N/A" }));
+            } else {
+                btn.innerText = `Fetching RAWG Tags (${games.length} items)...`;
+                finalData = await fetchTagsFromRAWG(games, btn, rawgApiKey);
+            }
 
-            downloadCSV(dataWithTags);
+            finalData.sort((a, b) => a.title.localeCompare(b.title));
+            downloadCSV(finalData);
+
             btn.innerText = 'Export Complete!';
             btn.style.backgroundColor = '#28a745';
-        } catch (error) {
-            console.error(error);
+        } catch (e) {
             btn.innerText = 'Error! Check Console.';
             btn.style.backgroundColor = '#dc3545';
         }
-
-        setTimeout(() => {
-            btn.innerText = 'Export Clean Library to CSV';
-            btn.disabled = false;
-            btn.style.backgroundColor = '#0078f2';
-        }, 5000);
+        setTimeout(() => { btn.innerText = 'Export Library (Full Metadata)'; btn.disabled = false; btn.style.backgroundColor = '#0078f2'; }, 5000);
     }
 
-    // 3. Fetch all transactions, filter junk, and deduplicate
+    // --- DATA FETCHING ---
     async function fetchHistory(nextPageToken = '', allGames = []) {
         const url = `https://www.epicgames.com/account/v2/payment/ajaxGetOrderHistory?nextPageToken=${nextPageToken}&locale=en-US`;
-        
-        // We can still use standard fetch here because this is on the same domain (epicgames.com)
-        const response = await fetch(url);
-        const data = await response.json();
-
-        const ignoreKeywords = ['v-bucks', 'credits', 'pack', 'dlc', 'addon', 'add-on', 'upgrade', 'soundtrack', 'platinum', 'coins'];
+        const res = await fetch(url);
+        const data = await res.json();
 
         for (const order of data.orders) {
+            const dateStr = formatDateTime(new Date(order.createdAt));
             for (const item of order.items) {
-                const titleLower = item.description.toLowerCase();
-                const isAddon = ignoreKeywords.some(keyword => titleLower.includes(keyword));
-
-                if (!isAddon) {
-                    allGames.push({
-                        title: item.description,
-                        namespace: item.namespace
-                    });
-                }
+                allGames.push({ title: item.description, dateAdded: dateStr });
             }
         }
+        if (data.nextPageToken) return fetchHistory(data.nextPageToken, allGames);
 
-        if (data.nextPageToken) {
-            return fetchHistory(data.nextPageToken, allGames);
+        const unique = [];
+        const seen = new Set();
+        for (const g of allGames) {
+            if (!seen.has(g.title)) { seen.add(g.title); unique.push(g); }
         }
-
-        const uniqueGames = [];
-        const titles = new Set();
-        for (const game of allGames) {
-            if (!titles.has(game.title)) {
-                titles.add(game.title);
-                uniqueGames.push(game);
-            }
-        }
-        return uniqueGames;
+        return unique;
     }
 
-    // 4. Fetch tags using Tampermonkey's CORS-bypassing request
-    async function fetchTagsForGames(games, btn) {
+    async function fetchTagsFromRAWG(games, btn, apiKey) {
         const results = [];
-        let count = 0;
-
-        for (const game of games) {
-            count++;
-            if (count % 5 === 0) {
-                btn.innerText = `Fetching Tags: ${count} / ${games.length}...`;
-            }
-
-            if (!game.namespace) {
-                results.push({ title: game.title, tags: "No namespace" });
-                continue;
-            }
-
-            const catalogUrl = `https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/${game.namespace}`;
-
+        for (let i = 0; i < games.length; i++) {
+            if (i % 5 === 0) btn.innerText = `Tagging: ${i+1}/${games.length}...`;
+            const searchTitle = games[i].title.replace(/ (Standard|Premium|Deluxe|Ultimate|Gold|GOTY|Director's Cut) Edition/gi, '').trim();
             try {
-                // Use GM_xmlhttpRequest to bypass CORS
-                const catData = await new Promise((resolve, reject) => {
-                    GM_xmlhttpRequest({
-                        method: "GET",
-                        url: catalogUrl,
-                        onload: function(response) {
-                            if (response.status >= 200 && response.status < 300) {
-                                try {
-                                    resolve(JSON.parse(response.responseText));
-                                } catch(e) {
-                                    reject("JSON Parse Error");
-                                }
-                            } else {
-                                reject(`HTTP Error: ${response.status}`);
-                            }
-                        },
-                        onerror: function(err) {
-                            reject("Network Error");
-                        }
-                    });
-                });
-
-                const tags = catData.pages?.[0]?.data?.metaData?.attributes
-                    ?.filter(attr => attr.key === 'genre' || attr.key === 'feature')
-                    .map(attr => attr.value) || ["No tags found"];
-
-                results.push({ title: game.title, tags: [...new Set(tags)].join(', ') });
+                const res = await fetch(`https://api.rawg.io/api/games?search=${encodeURIComponent(searchTitle)}&page_size=1&key=${apiKey}`);
+                if (res.status === 401) throw new Error("Key Invalid");
+                const data = await res.json();
+                if (data.results?.length > 0) {
+                    const info = data.results[0];
+                    const meta = [...new Set([...(info.genres?.map(g => g.name) || []), ...(info.tags?.filter(t => t.language === 'eng').map(t => t.name).slice(0, 4) || [])])];
+                    results.push({ ...games[i], tags: meta.join(', ') });
+                } else {
+                    results.push({ ...games[i], tags: "Not found" });
+                }
             } catch (e) {
-                results.push({ title: game.title, tags: "Metadata unavailable" });
+                if (e.message === "Key Invalid") { alert("Invalid API Key."); break; }
+                results.push({ ...games[i], tags: "Error" });
             }
-
-            // Kept the delay to avoid rate-limiting
-            await new Promise(r => setTimeout(r, 150));
+            await new Promise(r => setTimeout(r, 200));
         }
         return results;
     }
 
-    // 5. Build and download the CSV
+    // --- EXPORT ---
     function downloadCSV(data) {
-        const header = ['Game Title', 'Tags'];
-        
-        const rows = data.map(row => [
-            `"${row.title.replace(/"/g, '""')}"`,
-            `"${row.tags.replace(/"/g, '""')}"`
-        ]);
+        const now = new Date();
+        const timestamp = formatDateTime(now);
+        const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
 
-        const csvContent = [header, ...rows].map(e => e.join(",")).join("\n");
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
+        const header = ['Game Title', 'Date Added (YYYY/MM/DD HH:MM:SS)', 'Tags & Genres'];
+        const rows = data.map(r => [`"${r.title.replace(/"/g, '""')}"`, `"${r.dateAdded}"`, `"${r.tags.replace(/"/g, '""')}"`]);
+        const content = [header, ...rows].map(e => e.join(",")).join("\n");
 
         const link = document.createElement("a");
-        link.setAttribute("href", url);
-        link.setAttribute("download", "Epic_Games_Clean_Library_With_Tags.csv");
-        document.body.appendChild(link);
+        link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
+        link.download = `Epic_Library_${fileTime}.csv`;
         link.click();
-        document.body.removeChild(link);
     }
 
     setInterval(createButton, 2000);
-
 })();
