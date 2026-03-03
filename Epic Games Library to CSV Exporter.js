@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      5.9
-// @description  Bypasses CSP, fixes 'Unexpected Token' error and 'NaN' date errors.
+// @version      7.0
+// @description  Pulls maximum metadata from both Epic (Prices, Order IDs) and RAWG (Scores, Release Dates, Platforms).
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -20,12 +20,19 @@
     let isPaused = false;
     let shouldStop = false;
 
+    // --- API KEY MANAGEMENT ---
+    GM_registerMenuCommand("Update RAWG API Key", function() {
+        const currentKey = GM_getValue("rawg_api_key", "");
+        const newKey = prompt("Enter your RAWG API Key:", currentKey);
+        if (newKey !== null) {
+            GM_setValue("rawg_api_key", newKey.trim());
+            alert("Key updated!");
+        }
+    });
+
     // --- HELPER FUNCTIONS ---
     function formatDateTime(dateObj) {
-        // Robust check: if dateObj is invalid, return placeholder
-        if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
-            return "Unknown Date";
-        }
+        if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return "Unknown Date";
         const y = dateObj.getFullYear();
         const m = String(dateObj.getMonth() + 1).padStart(2, '0');
         const d = String(dateObj.getDate()).padStart(2, '0');
@@ -49,7 +56,7 @@
         if (logContainer) return;
         logContainer = document.createElement('div');
         logContainer.id = 'epic-logger-container';
-        logContainer.style.cssText = 'position: fixed; bottom: 80px; right: 20px; width: 380px; background: rgba(0,0,0,0.95); border-radius: 8px; z-index: 10000; display: none; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); overflow: hidden;';
+        logContainer.style.cssText = 'position: fixed; bottom: 80px; right: 20px; width: 400px; background: rgba(0,0,0,0.95); border-radius: 8px; z-index: 10000; display: none; border: 1px solid #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); overflow: hidden;';
         
         const progressWrapper = document.createElement('div');
         progressWrapper.style.cssText = 'width: 100%; height: 4px; background: #222;';
@@ -60,7 +67,7 @@
 
         const header = document.createElement('div');
         header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #1a1a1a; border-bottom: 1px solid #333;';
-        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export</span>
+        header.innerHTML = `<span style="color:#eee; font-size:11px; font-weight:bold;">Epic Metadata Export (v7.0)</span>
             <div>
                 <button id="epic-pause" style="background:#555; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer; margin-right:5px;">Pause</button>
                 <button id="epic-stop" style="background:#dc3545; color:white; border:none; padding:2px 8px; border-radius:3px; font-size:10px; cursor:pointer;">Stop & Save</button>
@@ -69,7 +76,7 @@
 
         const logText = document.createElement('div');
         logText.id = 'epic-log-text';
-        logText.style.cssText = 'height: 180px; color: #ccc; font-family: "Consolas", monospace; font-size: 11px; padding: 12px; overflow-y: auto; line-height: 1.6;';
+        logText.style.cssText = 'height: 200px; color: #ccc; font-family: "Consolas", monospace; font-size: 11px; padding: 12px; overflow-y: auto; line-height: 1.6;';
         logContainer.appendChild(logText);
         document.body.appendChild(logContainer);
 
@@ -92,7 +99,7 @@
         logArea.scrollTop = logArea.scrollHeight;
     }
 
-    // --- DATA FETCHING ---
+    // --- DATA FETCHING (EPIC) ---
     async function fetchHistory(nextPageToken = '', allGames = []) {
         const url = `https://www.epicgames.com/account/v2/payment/ajaxGetOrderHistory?nextPageToken=${nextPageToken}&locale=en-US`;
         const res = await fetch(url);
@@ -106,12 +113,23 @@
         if (!data.orders) return allGames;
 
         for (const order of data.orders) {
-            // FIX: Try multiple date fields in case createdAt is malformed
-            const rawDate = order.createdAt || order.completionDate || null;
+            const rawDate = order.createdAtMillis || null;
             const dateStr = formatDateTime(new Date(rawDate));
+            const orderId = order.orderId || "Unknown";
             
             for (const item of order.items) { 
-                allGames.push({ title: item.description, dateAdded: dateStr }); 
+                // Convert price from cents (e.g., 999 -> 9.99)
+                const amount = item.amount ? (item.amount / 100).toFixed(2) : "0.00";
+                const currency = item.currency || "USD";
+                
+                allGames.push({ 
+                    title: item.description, 
+                    dateAdded: dateStr,
+                    orderId: orderId,
+                    price: `${amount} ${currency}`,
+                    namespace: item.namespace || "N/A",
+                    offerId: item.offerId || "N/A"
+                }); 
             }
         }
         if (data.nextPageToken) return fetchHistory(data.nextPageToken, allGames);
@@ -122,9 +140,11 @@
         return unique;
     }
 
+    // --- DATA FETCHING (RAWG) ---
     async function fetchTagsWithControls(games, apiKey) {
         const results = [];
         const total = games.length;
+        
         for (let i = 0; i < total; i++) {
             if (shouldStop) break;
             while (isPaused && !shouldStop) { await new Promise(r => setTimeout(r, 500)); }
@@ -141,16 +161,39 @@
                         onerror: rej
                     });
                 });
+                
                 if (data.results?.length > 0) {
                     const info = data.results[0];
                     const meta = [...new Set([...(info.genres?.map(g => g.name) || []), ...(info.tags?.filter(t => t.language === 'eng').map(t => t.name).slice(0, 4) || [])])];
+                    
+                    // Extracting all the new extended data
+                    const releaseDate = info.released || "N/A";
+                    const metacritic = info.metacritic || "N/A";
+                    const rating = info.rating ? `${info.rating} / ${info.rating_top}` : "N/A";
+                    const playtime = info.playtime ? `${info.playtime} hrs` : "N/A";
+                    const esrb = info.esrb_rating ? info.esrb_rating.name : "N/A";
+                    const platforms = info.platforms ? info.platforms.map(p => p.platform.name).join(', ') : "N/A";
+
                     logMessage(`<span style="color:#0078f2;">#${i+1}</span> ${displayTitle}`);
-                    results.push({ ...games[i], title: displayTitle, tags: meta.join(', ') || "No tags" });
+                    
+                    results.push({ 
+                        ...games[i], 
+                        title: displayTitle, 
+                        tags: meta.join(', ') || "No tags",
+                        releaseDate: releaseDate,
+                        metacritic: metacritic,
+                        rating: rating,
+                        playtime: playtime,
+                        esrb: esrb,
+                        platforms: platforms
+                    });
                 } else {
                     logMessage(`<span style="color:#555;">#${i+1}</span> ${displayTitle} (No match)`);
-                    results.push({ ...games[i], title: displayTitle, tags: "N/A" });
+                    results.push({ ...games[i], title: displayTitle, tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" });
                 }
-            } catch (e) { results.push({ ...games[i], title: displayTitle, tags: "Error" }); }
+            } catch (e) { 
+                results.push({ ...games[i], title: displayTitle, tags: "Error", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" }); 
+            }
             await new Promise(r => setTimeout(r, 250));
         }
         return results;
@@ -162,9 +205,9 @@
         isPaused = false; shouldStop = false;
 
         if (!rawgApiKey) {
-            let input = prompt("Enter RAWG API Key, or Cancel for Titles only.");
+            let input = prompt("Enter RAWG API Key, or Cancel for Titles & Epic data only.");
             if (input) { rawgApiKey = input.trim(); GM_setValue("rawg_api_key", rawgApiKey); }
-            else { if (confirm("Export WITHOUT tags?")) skipTags = true; else return; }
+            else { if (confirm("Export WITHOUT RAWG tags? (You will still get Epic Prices/Order IDs)")) skipTags = true; else return; }
         }
 
         const btn = document.getElementById('epic-csv-export-btn');
@@ -172,14 +215,14 @@
         if (logContainer) document.getElementById('epic-log-text').innerHTML = '';
 
         try {
-            logMessage("Verifying session and dates...", "#0078f2");
+            logMessage("Verifying Epic history and receipts...", "#0078f2");
             const games = await fetchHistory();
             
             let finalData = [];
             if (skipTags) {
-                finalData = games.map(g => ({ ...g, title: smartCleanTitle(g.title), tags: "N/A" }));
+                finalData = games.map(g => ({ ...g, title: smartCleanTitle(g.title), tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" }));
             } else {
-                logMessage(`Found ${games.length} titles. Starting sync...`, "#0078f2");
+                logMessage(`Found ${games.length} titles. Syncing with RAWG...`, "#0078f2");
                 finalData = await fetchTagsWithControls(games, rawgApiKey);
             }
 
@@ -195,7 +238,7 @@
 
         setTimeout(() => { 
             if (logContainer) logContainer.style.display = 'none';
-            btn.innerText = 'Export Library (v5.9)'; 
+            btn.innerText = 'Export Full Data (v7.0)'; 
             btn.disabled = false; 
             btn.style.backgroundColor = '#0078f2'; 
         }, 12000);
@@ -204,12 +247,44 @@
     function downloadCSV(data) {
         const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.');
-        const header = ['Game Title', 'Date Added (YYYY/MM/DD HH:MM:SS)', 'Tags & Genres'];
-        const rows = data.map(r => [`"${r.title.replace(/"/g, '""')}"`, `"${r.dateAdded}"`, `"${r.tags.replace(/"/g, '""')}"`]);
+        
+        // Massive new header list!
+        const header = [
+            'Game Title', 
+            'Date Added', 
+            'Price Paid', 
+            'Order ID',
+            'Namespace',
+            'Offer ID',
+            'Tags & Genres', 
+            'Release Date', 
+            'Metacritic Score', 
+            'User Rating', 
+            'Avg Playtime', 
+            'ESRB Rating', 
+            'Platforms'
+        ];
+        
+        const rows = data.map(r => [
+            `"${r.title.replace(/"/g, '""')}"`,
+            `"${r.dateAdded}"`,
+            `"${r.price}"`,
+            `"${r.orderId}"`,
+            `"${r.namespace}"`,
+            `"${r.offerId}"`,
+            `"${(r.tags || 'N/A').replace(/"/g, '""')}"`,
+            `"${r.releaseDate || 'N/A'}"`,
+            `"${r.metacritic || 'N/A'}"`,
+            `"${r.rating || 'N/A'}"`,
+            `"${r.playtime || 'N/A'}"`,
+            `"${r.esrb || 'N/A'}"`,
+            `"${(r.platforms || 'N/A').replace(/"/g, '""')}"`
+        ]);
+        
         const content = [header, ...rows].map(e => e.join(",")).join("\n");
         const link = document.createElement("a");
         link.href = URL.createObjectURL(new Blob([content], { type: 'text/csv;charset=utf-8;' }));
-        link.download = `Epic_Library_${fileTime}.csv`;
+        link.download = `Epic_Library_Full_${fileTime}.csv`;
         link.click();
     }
 
@@ -217,7 +292,7 @@
         if (document.getElementById('epic-csv-export-btn')) return;
         const btn = document.createElement('button');
         btn.id = 'epic-csv-export-btn';
-        btn.innerText = 'Export Library (v5.9)';
+        btn.innerText = 'Export Full Data (v7.0)';
         btn.style.cssText = 'position: fixed; bottom: 20px; right: 20px; z-index: 9999; padding: 12px 24px; background-color: #0078f2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
         btn.onclick = startExport;
         document.body.appendChild(btn);
