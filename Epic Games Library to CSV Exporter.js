@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV Exporter
-// @namespace    http://tampermonkey.net/
-// @version      1.1
+// @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
+// @version      1.2
 // @description  Fetches Epic Games library via transaction history, filters out add-ons, retrieves tags, and exports to CSV.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      store-content-ipv4.ak.epicgames.com
 // ==/UserScript==
 
 (function() {
@@ -46,7 +47,6 @@
             btn.style.backgroundColor = '#dc3545';
         }
 
-        // Reset button after 5 seconds
         setTimeout(() => {
             btn.innerText = 'Export Clean Library to CSV';
             btn.disabled = false;
@@ -57,17 +57,16 @@
     // 3. Fetch all transactions, filter junk, and deduplicate
     async function fetchHistory(nextPageToken = '', allGames = []) {
         const url = `https://www.epicgames.com/account/v2/payment/ajaxGetOrderHistory?nextPageToken=${nextPageToken}&locale=en-US`;
+        
+        // We can still use standard fetch here because this is on the same domain (epicgames.com)
         const response = await fetch(url);
         const data = await response.json();
 
-        // Keywords that usually indicate an add-on or currency, not a base game
         const ignoreKeywords = ['v-bucks', 'credits', 'pack', 'dlc', 'addon', 'add-on', 'upgrade', 'soundtrack', 'kudos', 'platinum', 'coins'];
 
         for (const order of data.orders) {
             for (const item of order.items) {
                 const titleLower = item.description.toLowerCase();
-                
-                // Check if the title contains any of our ignore keywords
                 const isAddon = ignoreKeywords.some(keyword => titleLower.includes(keyword));
 
                 if (!isAddon) {
@@ -83,7 +82,6 @@
             return fetchHistory(data.nextPageToken, allGames);
         }
 
-        // Remove duplicates (in case you somehow bought the same game twice)
         const uniqueGames = [];
         const titles = new Set();
         for (const game of allGames) {
@@ -95,14 +93,13 @@
         return uniqueGames;
     }
 
-    // 4. Fetch tags from the Catalog API
+    // 4. Fetch tags using Tampermonkey's CORS-bypassing request
     async function fetchTagsForGames(games, btn) {
         const results = [];
         let count = 0;
 
         for (const game of games) {
             count++;
-            // Update UI every 5 items so the browser doesn't freeze
             if (count % 5 === 0) {
                 btn.innerText = `Fetching Tags: ${count} / ${games.length}...`;
             }
@@ -115,23 +112,39 @@
             const catalogUrl = `https://store-content-ipv4.ak.epicgames.com/api/en-US/content/products/${game.namespace}`;
 
             try {
-                const res = await fetch(catalogUrl);
-                if (!res.ok) throw new Error('Not found');
-                const catData = await res.json();
+                // Use GM_xmlhttpRequest to bypass CORS
+                const catData = await new Promise((resolve, reject) => {
+                    GM_xmlhttpRequest({
+                        method: "GET",
+                        url: catalogUrl,
+                        onload: function(response) {
+                            if (response.status >= 200 && response.status < 300) {
+                                try {
+                                    resolve(JSON.parse(response.responseText));
+                                } catch(e) {
+                                    reject("JSON Parse Error");
+                                }
+                            } else {
+                                reject(`HTTP Error: ${response.status}`);
+                            }
+                        },
+                        onerror: function(err) {
+                            reject("Network Error");
+                        }
+                    });
+                });
 
-                // Extract and combine Genre and Feature tags
-                const tags = catData.pages[0]?.data?.metaData?.attributes
+                const tags = catData.pages?.[0]?.data?.metaData?.attributes
                     ?.filter(attr => attr.key === 'genre' || attr.key === 'feature')
                     .map(attr => attr.value) || ["No tags found"];
 
                 results.push({ title: game.title, tags: [...new Set(tags)].join(', ') });
             } catch (e) {
-                // If it still 404s (e.g. a delisted game), it gracefully marks it and moves on
                 results.push({ title: game.title, tags: "Metadata unavailable" });
             }
 
-            // IMPORTANT: Add a 100ms delay to prevent Epic from rate-limiting your IP
-            await new Promise(r => setTimeout(r, 100));
+            // Kept the delay to avoid rate-limiting
+            await new Promise(r => setTimeout(r, 150));
         }
         return results;
     }
@@ -140,7 +153,6 @@
     function downloadCSV(data) {
         const header = ['Game Title', 'Tags'];
         
-        // Escape quotes and wrap fields in quotes to handle commas inside titles/tags
         const rows = data.map(row => [
             `"${row.title.replace(/"/g, '""')}"`,
             `"${row.tags.replace(/"/g, '""')}"`
@@ -158,7 +170,6 @@
         document.body.removeChild(link);
     }
 
-    // Continuously check and re-add the button if the user navigates tabs on the page
     setInterval(createButton, 2000);
 
 })();
