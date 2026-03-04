@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         One-Click Epic Games Library to CSV
 // @namespace    https://github.com/joex92/Epic-Games-One-Click-Library-Exporter
-// @version      11.2
-// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates prices, retrieves RAWG metadata. Preserves full Edition names in the CSV while optimizing search queries.
+// @version      11.3
+// @description  Exports your Epic Games library to a CSV file. Fetches order history, calculates actual prices paid, and retrieves advanced metadata via the RAWG API. Features live ETA and RAWG match verification.
 // @author       JoeX92 & Gemini AI Pro
 // @match        https://www.epicgames.com/account/*
 // @grant        GM_getValue
@@ -32,7 +32,6 @@
     });
 
     // --- UTILITY / HELPER FUNCTIONS ---
-
     function formatDateTime(dateObj) {
         if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return "Unknown Date";
         const y = dateObj.getFullYear();
@@ -44,8 +43,6 @@
         return `${y}/${m}/${d} ${hh}:${mm}:${ss}`;
     }
 
-    // NEW: Only fixes spacing (e.g., "AlanWakePremiumEdition" -> "Alan Wake Premium Edition")
-    // This is the title that will be saved in your final CSV file.
     function formatTitle(rawTitle) {
         if (!rawTitle) return "";
         let cleaned = rawTitle.trim();
@@ -55,7 +52,6 @@
         return cleaned;
     }
 
-    // NEW: Strips the edition fluff from the formatted title ONLY for the RAWG search query.
     function getSearchQuery(title) {
         return title.replace(/ (Standard|Premium|Deluxe|Ultimate|Gold|GOTY|Director's Cut) Edition/gi, '').trim();
     }
@@ -81,7 +77,6 @@
     }
 
     // --- UI CREATION & MANAGEMENT ---
-
     function createLogger() {
         if (logContainer) return; 
         
@@ -156,7 +151,6 @@
     }
 
     // --- MAIN LOGIC: DATA FETCHING (EPIC GAMES) ---
-
     async function fetchHistory(nextPageToken = '', allGames = []) {
         const url = `https://www.epicgames.com/account/v2/payment/ajaxGetOrderHistory?nextPageToken=${nextPageToken}&locale=en-US`;
         const res = await fetch(url);
@@ -170,7 +164,6 @@
         if (!data.orders) return allGames;
 
         for (const order of data.orders) {
-            console.log(order);
             const rawDate = order.createdAtMillis || null;
             const dateStr = formatDateTime(new Date(rawDate));
             const orderId = order.orderId || "Unknown";
@@ -226,7 +219,6 @@
     }
 
     // --- MAIN LOGIC: DATA FETCHING (RAWG METADATA) ---
-
     async function fetchTagsWithControls(games, apiKey) {
         const results = [];
         const total = games.length;
@@ -241,10 +233,11 @@
                 if (etaElement) etaElement.innerText = "Stopped";
                 for (let j = i; j < total; j++) {
                     const game = games[j];
-                    const displayTitle = formatTitle(game.title); // Use the formatTitle here to keep the full name
+                    const displayTitle = formatTitle(game.title); 
                     results.push({ 
                         ...game, 
                         title: displayTitle, 
+                        rawgName: "Skipped", // Fallback for stopped items
                         tags: "Skipped",
                         releaseDate: "Skipped",
                         metacritic: "Skipped",
@@ -261,9 +254,7 @@
 
             if (progressBar) progressBar.style.width = `${((i + 1) / total) * 100}%`;
             
-            // Format the title for the CSV display
             const displayTitle = formatTitle(games[i].title);
-            // Strip the edition tags out just for the RAWG search URL
             const searchQuery = getSearchQuery(displayTitle);
             
             const rawgUrl = `https://api.rawg.io/api/games?search=${encodeURIComponent(searchQuery)}&page_size=1&key=${apiKey}`;
@@ -282,6 +273,8 @@
                     
                     const meta = [...new Set([...(info.genres?.map(g => g.name) || []), ...(info.tags?.filter(t => t.language === 'eng').map(t => t.name).slice(0, 4) || [])])];
                     
+                    // NEW: Extracting the official RAWG database name
+                    const rawgName = info.name || "N/A";
                     const releaseDate = info.released || "N/A";
                     const metacritic = info.metacritic || "N/A";
                     const rating = info.rating ? `${info.rating} / ${info.rating_top}` : "N/A";
@@ -294,6 +287,7 @@
                     results.push({ 
                         ...games[i], 
                         title: displayTitle, 
+                        rawgName: rawgName, // Pushing to final object
                         tags: meta.join(', ') || "No tags",
                         releaseDate: releaseDate,
                         metacritic: metacritic,
@@ -304,11 +298,11 @@
                     });
                 } else {
                     logMessage(`<span style="color:#555;">[${i+1}/${total}]</span> ${displayTitle} <span style="color:#ffc107;">⚠ Not Found</span>`);
-                    results.push({ ...games[i], title: displayTitle, tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" });
+                    results.push({ ...games[i], title: displayTitle, rawgName: "N/A", tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" });
                 }
             } catch (e) { 
                 logMessage(`<span style="color:#dc3545;">[${i+1}/${total}]</span> ${displayTitle} <span style="color:#dc3545;">❌ Error</span>`);
-                results.push({ ...games[i], title: displayTitle, tags: "Error", releaseDate: "Error", metacritic: "Error", rating: "Error", playtime: "Error", esrb: "Error", platforms: "Error" }); 
+                results.push({ ...games[i], title: displayTitle, rawgName: "Error", tags: "Error", releaseDate: "Error", metacritic: "Error", rating: "Error", playtime: "Error", esrb: "Error", platforms: "Error" }); 
             }
             
             await new Promise(r => setTimeout(r, 250));
@@ -356,8 +350,8 @@
             
             let finalData = [];
             if (skipTags) {
-                // Uses formatTitle to keep full names if RAWG is skipped
-                finalData = games.map(g => ({ ...g, title: formatTitle(g.title), tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" }));
+                // Included rawgName as N/A if metadata is skipped entirely
+                finalData = games.map(g => ({ ...g, title: formatTitle(g.title), rawgName: "N/A", tags: "N/A", releaseDate: "N/A", metacritic: "N/A", rating: "N/A", playtime: "N/A", esrb: "N/A", platforms: "N/A" }));
             } else {
                 logMessage(`Found ${games.length} titles. Syncing with RAWG...`, "#0078f2");
                 finalData = await fetchTagsWithControls(games, rawgApiKey);
@@ -388,6 +382,7 @@
         const timestamp = formatDateTime(new Date());
         const fileTime = timestamp.replace(/\//g, '-').replace(/:/g, '.'); 
         
+        // NEW: Injected RAWG Match Name into the header
         const header = [
             'Game Title', 
             'Date Added', 
@@ -398,6 +393,7 @@
             'Order ID',
             'Namespace',
             'Offer ID',
+            'RAWG Match Name', 
             'Tags & Genres', 
             'Release Date', 
             'Metacritic Score', 
@@ -407,6 +403,7 @@
             'Platforms'
         ];
         
+        // Mapped r.rawgName into the output row
         const rows = data.map(r => [
             `"${r.title.replace(/"/g, '""')}"`,
             `"${r.dateAdded}"`,
@@ -417,6 +414,7 @@
             `"${r.orderId}"`,
             `"${r.namespace}"`,
             `"${r.offerId}"`,
+            `"${(r.rawgName || 'N/A').replace(/"/g, '""')}"`,
             `"${(r.tags || 'N/A').replace(/"/g, '""')}"`,
             `"${r.releaseDate || 'N/A'}"`,
             `"${r.metacritic || 'N/A'}"`,
